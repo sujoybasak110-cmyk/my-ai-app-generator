@@ -1,31 +1,261 @@
-import streamlit as st
-import google.generativeai as genai
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Financial Analytics Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
 
-# --- CONFIGURATION ---
-# Dhyan dein: Quotes " " lagana zaroori hai
-API_KEY = "AIzaSyA-nr5V4yjRlpA08bmKUwO9PGP6LrV2xnc" 
-genai.configure(api_key=API_KEY)
+<body class="bg-slate-50 text-slate-800">
+<div id="dashboard" class="max-w-7xl mx-auto p-6 space-y-6">
 
-model = genai.GenerativeModel('gemini-1.5-flash')
+  <!-- Header -->
+  <div class="flex flex-col md:flex-row justify-between items-center gap-4">
+    <h1 class="text-3xl font-bold text-teal-700">Financial Analytics Dashboard</h1>
+    <div class="flex gap-3">
+      <button onclick="loadDemoData()" class="bg-teal-600 text-white px-4 py-2 rounded-lg hover:bg-teal-700">
+        Demo Data
+      </button>
+      <button onclick="downloadPDF()" class="bg-slate-700 text-white px-4 py-2 rounded-lg hover:bg-slate-800">
+        Download PDF
+      </button>
+    </div>
+  </div>
 
-# --- UI SETUP ---
-st.set_page_config(page_title="AI App Builder", layout="wide")
+  <!-- File Upload -->
+  <div id="dropZone"
+       class="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center bg-white cursor-pointer hover:border-teal-500">
+    <p class="text-slate-500">Drag & drop CSV file here or click to upload</p>
+    <input type="file" id="fileInput" accept=".csv" class="hidden" />
+  </div>
 
-st.title("🤖 Prompt to Web App Generator")
-st.write("Bas bataiye aapko kya app chahiye, aur AI uska code likh dega!")
+  <!-- KPI Cards -->
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+    <div class="bg-white p-5 rounded-xl shadow flex items-center gap-4">
+      <i data-lucide="arrow-down-circle" class="text-coral-500"></i>
+      <div>
+        <p class="text-sm text-slate-500">Total Expense</p>
+        <p id="expenseCard" class="text-xl font-bold">₹0</p>
+      </div>
+    </div>
+    <div class="bg-white p-5 rounded-xl shadow flex items-center gap-4">
+      <i data-lucide="arrow-up-circle" class="text-teal-600"></i>
+      <div>
+        <p class="text-sm text-slate-500">Monthly Avg</p>
+        <p id="avgCard" class="text-xl font-bold">₹0</p>
+      </div>
+    </div>
+    <div class="bg-white p-5 rounded-xl shadow flex items-center gap-4">
+      <i data-lucide="wallet" class="text-slate-600"></i>
+      <div>
+        <p class="text-sm text-slate-500">Top Category</p>
+        <p id="categoryCard" class="text-xl font-bold">—</p>
+      </div>
+    </div>
+  </div>
 
-user_prompt = st.text_area("Aapko kaisa app chahiye?", placeholder="Example: Ek unit converter banao...")
+  <!-- Charts -->
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div class="bg-white p-5 rounded-xl shadow">
+      <h2 class="font-semibold mb-3">Expense by Category</h2>
+      <canvas id="pieChart"></canvas>
+    </div>
+    <div class="bg-white p-5 rounded-xl shadow">
+      <h2 class="font-semibold mb-3">Monthly Spending Trend</h2>
+      <canvas id="barChart"></canvas>
+    </div>
+  </div>
 
-if st.button("Generate My App 🚀"):
-    if not user_prompt:
-        st.warning("Pehle kuch likhiye!")
-    else:
-        with st.spinner("AI dimaag laga raha hai..."):
-            # AI ko prompt bhejna
-            response = model.generate_content(f"Create a single file HTML/CSS web app for: {user_prompt}. Output ONLY the code.")
-            generated_code = response.text.replace("```html", "").replace("```", "")
-            
-            # Result dikhana
-            st.subheader("Aapka App Taiyar Hai!")
-            st.components.v1.html(generated_code, height=600, scrolling=True)
-            st.code(generated_code, language='html')
+  <!-- Table -->
+  <div class="bg-white p-5 rounded-xl shadow">
+    <div class="flex justify-between mb-3">
+      <h2 class="font-semibold">Transactions</h2>
+      <input id="searchInput" type="text" placeholder="Search..."
+             class="border rounded-lg px-3 py-1 text-sm"/>
+    </div>
+    <div class="overflow-auto max-h-[400px]">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-100">
+          <tr>
+            <th class="p-2 cursor-pointer" onclick="sortTable('date')">Date</th>
+            <th class="p-2 cursor-pointer" onclick="sortTable('category')">Category</th>
+            <th class="p-2">Description</th>
+            <th class="p-2 cursor-pointer" onclick="sortTable('amount')">Amount</th>
+            <th class="p-2">Action</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<script>
+lucide.createIcons();
+
+let transactions = [];
+let pieChart, barChart;
+let sortDirection = 1;
+
+const colors = {
+  teal: '#0f766e',
+  coral: '#ff6b6b',
+  slate: '#475569'
+};
+
+document.getElementById('dropZone').onclick = () => fileInput.click();
+fileInput.onchange = e => parseCSV(e.target.files[0]);
+
+dropZone.ondragover = e => { e.preventDefault(); dropZone.classList.add('border-teal-500'); };
+dropZone.ondragleave = () => dropZone.classList.remove('border-teal-500');
+dropZone.ondrop = e => {
+  e.preventDefault();
+  dropZone.classList.remove('border-teal-500');
+  parseCSV(e.dataTransfer.files[0]);
+};
+
+function parseCSV(file) {
+  Papa.parse(file, {
+    header: true,
+    skipEmptyLines: true,
+    complete: res => {
+      transactions = res.data.map(row => autoMapColumns(row)).filter(r => r.amount);
+      updateDashboard();
+    }
+  });
+}
+
+function autoMapColumns(row) {
+  const keys = Object.keys(row);
+  const get = (nameList) => keys.find(k => nameList.some(n => k.toLowerCase().includes(n)));
+  return {
+    date: row[get(['date'])] || '',
+    category: row[get(['category', 'type'])] || 'Other',
+    description: row[get(['description', 'note'])] || '',
+    amount: parseFloat(row[get(['amount', 'value', 'total'])]) || 0
+  };
+}
+
+function loadDemoData() {
+  transactions = [
+    {date:'2025-01-05', category:'Food', description:'Lunch', amount:250},
+    {date:'2025-01-10', category:'Transport', description:'Uber', amount:450},
+    {date:'2025-02-02', category:'Shopping', description:'Clothes', amount:2200},
+    {date:'2025-02-15', category:'Food', description:'Groceries', amount:1200},
+    {date:'2025-03-01', category:'Bills', description:'Electricity', amount:1800}
+  ];
+  updateDashboard();
+}
+
+function updateDashboard() {
+  renderTable();
+  updateStats();
+  renderCharts();
+}
+
+function updateStats() {
+  const total = transactions.reduce((a,b)=>a+b.amount,0);
+
+  const months = [...new Set(transactions.map(t => t.date?.slice(0,7)))].length || 1;
+  const avg = total / months;
+
+  const categoryTotals = {};
+  transactions.forEach(t => categoryTotals[t.category] = (categoryTotals[t.category]||0)+t.amount);
+  const topCategory = Object.entries(categoryTotals).sort((a,b)=>b[1]-a[1])[0]?.[0] || '—';
+
+  expenseCard.textContent = '₹' + total.toLocaleString();
+  avgCard.textContent = '₹' + Math.round(avg).toLocaleString();
+  categoryCard.textContent = topCategory;
+}
+
+function renderCharts() {
+  const categoryTotals = {};
+  const monthlyTotals = {};
+
+  transactions.forEach(t => {
+    categoryTotals[t.category] = (categoryTotals[t.category]||0)+t.amount;
+    const month = t.date?.slice(0,7);
+    monthlyTotals[month] = (monthlyTotals[month]||0)+t.amount;
+  });
+
+  if (pieChart) pieChart.destroy();
+  if (barChart) barChart.destroy();
+
+  pieChart = new Chart(pieChartCanvas, {
+    type: 'pie',
+    data: {
+      labels: Object.keys(categoryTotals),
+      datasets: [{
+        data: Object.values(categoryTotals),
+        backgroundColor: [colors.teal, colors.coral, colors.slate, '#14b8a6', '#f87171']
+      }]
+    }
+  });
+
+  barChart = new Chart(barChartCanvas, {
+    type: 'bar',
+    data: {
+      labels: Object.keys(monthlyTotals),
+      datasets: [{
+        label: 'Monthly Spend',
+        data: Object.values(monthlyTotals),
+        backgroundColor: colors.teal
+      }]
+    },
+    options: {scales:{y:{beginAtZero:true}}}
+  });
+}
+
+function renderTable() {
+  const filter = searchInput.value.toLowerCase();
+  tableBody.innerHTML = '';
+
+  transactions
+    .filter(t => Object.values(t).join().toLowerCase().includes(filter))
+    .forEach((t,i)=>{
+      const row = `
+        <tr class="border-b">
+          <td class="p-2">${t.date}</td>
+          <td class="p-2">${t.category}</td>
+          <td class="p-2">${t.description}</td>
+          <td class="p-2">₹${t.amount}</td>
+          <td class="p-2">
+            <button onclick="deleteRow(${i})" class="text-red-500">Delete</button>
+          </td>
+        </tr>`;
+      tableBody.innerHTML += row;
+    });
+}
+
+function deleteRow(index) {
+  transactions.splice(index,1);
+  updateDashboard();
+}
+
+function sortTable(field) {
+  transactions.sort((a,b)=> (a[field] > b[field] ? 1 : -1) * sortDirection);
+  sortDirection *= -1;
+  renderTable();
+}
+
+searchInput.oninput = renderTable;
+
+async function downloadPDF() {
+  const canvas = await html2canvas(document.getElementById('dashboard'));
+  const img = canvas.toDataURL('image/png');
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF('p','mm','a4');
+  const width = pdf.internal.pageSize.getWidth();
+  const height = (canvas.height * width) / canvas.width;
+  pdf.addImage(img, 'PNG', 0, 0, width, height);
+  pdf.save('financial-report.pdf');
+}
+</script>
+</body>
+</html>
